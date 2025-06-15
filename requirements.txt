@@ -3,4 +3,3 @@ matplotlib
 mplfinance
 python-dotenv
 pandas
-re
