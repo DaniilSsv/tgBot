@@ -1,4 +1,4 @@
-name: Run Analyzer Every 5 Minutes
+name: Run analyzer script
 
 on:
   schedule:
