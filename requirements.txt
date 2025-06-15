@@ -1,3 +1,6 @@
 requests
 matplotlib
+mplfinance
 python-dotenv
+pandas
+re
