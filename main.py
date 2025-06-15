@@ -1,11 +1,12 @@
 import requests
 import matplotlib.pyplot as plt
+import pandas as pd
 from datetime import datetime
 import io
 import os
 from dotenv import load_dotenv
 
-# === Telegram настройки ===
+# Load environment (Telegram bot token & chat ID)
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -13,214 +14,160 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 previous_signals = {}
 
 def send_telegram(message, image_bytes=None):
+    """Send a message or photo to Telegram via bot."""
+    url_base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
     if image_bytes:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+        url = f"{url_base}/sendPhoto"
         files = {'photo': ('chart.png', image_bytes)}
-        data = {
-            'chat_id': TELEGRAM_CHAT_ID,
-            'caption': message,
-            'parse_mode': 'Markdown'
-        }
-        response = requests.post(url, data=data, files=files)
+        data = {'chat_id': TELEGRAM_CHAT_ID, 'caption': message, 'parse_mode': 'Markdown'}
+        resp = requests.post(url, data=data, files=files)
     else:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        data = {
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': message,
-            'parse_mode': 'Markdown'
-        }
-        response = requests.post(url, data=data)
+        url = f"{url_base}/sendMessage"
+        data = {'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
+        resp = requests.post(url, data=data)
+    resp.raise_for_status()
+    return resp.json()
 
-    try:
-        response.raise_for_status()
-    except requests.exceptions.HTTPError as e:
-        print(f"Telegram API returned an error: {e}\nResponse content: {response.text}")
-    return response.json()
-
-
-def fetch_klines(symbol, limit=200):
+def fetch_klines(symbol, interval='1h', limit=200):
+    """Fetch last N klines (OHLCV) for symbol from Binance."""
     url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": "1h", "limit": limit}
-    r = requests.get(url, params=params)
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    r = requests.get(url, params=params, timeout=5)
     data = r.json()
-    if not isinstance(data, list) or len(data) < limit:
-        raise ValueError(f"Invalid or insufficient data for {symbol}")
-    closes = [float(c[4]) for c in data]
-    times = [datetime.fromtimestamp(c[0]/1000) for c in data]
-    print(f"Fetched {len(closes)} prices for {symbol}")
-    return closes, times
+    df = pd.DataFrame(data, columns=[
+        'Open time','Open','High','Low','Close','Volume',
+        'Close time','Quote asset volume','Number of trades',
+        'Taker buy base asset volume','Taker buy quote asset volume','Ignore'
+    ])
+    # Convert types
+    for col in ['Open','High','Low','Close','Volume']:
+        df[col] = pd.to_numeric(df[col])
+    df['Open time'] = pd.to_datetime(df['Open time'], unit='ms')
+    df.set_index('Open time', inplace=True)
+    return df[['Open','High','Low','Close','Volume']]
 
-def sma(prices, length):
-    if len(prices) < length:
+def sma(series, period):
+    if len(series) < period: 
         return None
-    return sum(prices[-length:]) / length
+    return series.iloc[-period:].mean()
 
-def rsi(prices, period=14):
-    if len(prices) < period + 1:
+def rsi(series, period=14):
+    if len(series) < period+1: 
         return None
-    gains, losses = [], []
-    for i in range(1, period + 1):
-        diff = prices[-i] - prices[-i - 1]
-        gains.append(max(diff, 0))
-        losses.append(max(-diff, 0))
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-    if avg_loss == 0:
-        return 100
-    rs = avg_gain / avg_loss
+    delta = series.diff().iloc[-(period+1):].dropna()
+    gains = delta[delta > 0].sum() / period
+    losses = -delta[delta < 0].sum() / period
+    if losses == 0:
+        return 100.0
+    rs = gains / losses
     return 100 - (100 / (1 + rs))
 
-def ema(prices, period):
-    if len(prices) < period:
+def macd_hist(series):
+    if len(series) < 35:  # need at least 26 + 9
         return None
-    k = 2 / (period + 1)
-    ema_val = prices[-period]
-    for price in prices[-period + 1:]:
-        ema_val = price * k + ema_val * (1 - k)
-    return ema_val
+    ema12 = series.ewm(span=12, adjust=False).mean()
+    ema26 = series.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal = macd_line.ewm(span=9, adjust=False).mean()
+    return macd_line.iloc[-1] - signal.iloc[-1]
 
-def macd(prices):
-    ema12 = ema(prices, 12)
-    ema26 = ema(prices, 26)
-    if ema12 is None or ema26 is None:
-        return None
-    return ema12 - ema26
-
-def macd_hist(prices):
-    if len(prices) < 35:
-        return None  # Need at least 26 for EMA and 9 for signal
-
-    macd_line = []
-    for i in range(26, len(prices)):
-        slice_prices = prices[:i+1]
-        macd_val = macd(slice_prices)
-        if macd_val is not None:
-            macd_line.append(macd_val)
-
-    if len(macd_line) < 9:
-        return None
-
-    signal_line = ema(macd_line[-9:], 9)
-    current_macd = macd(prices)
-    return current_macd - signal_line if signal_line is not None else None
-
-
-def generate_signal(symbol, prices):
-    price = prices[-1]
-    rsi_val = rsi(prices)
-    macd_h = macd_hist(prices)
-    sma50 = sma(prices, 50)
-    sma200 = sma(prices, 200)
-    print(f"{symbol} indicators: RSI={rsi_val}, MACD_H={macd_h}, SMA50={sma50}, SMA200={sma200}")
-
-    if None in (rsi_val, macd_h, sma50, sma200):
+def generate_signal(symbol, df):
+    """Compute RSI, MACD histogram, and SMA(50,200) signals."""
+    closes = df['Close']
+    price = closes.iloc[-1]
+    r_val = rsi(closes, 14)
+    m_val = macd_hist(closes)
+    sma50 = sma(closes, 50)
+    sma200 = sma(closes, 200)
+    if None in (r_val, m_val, sma50, sma200):
         return None, None, None
-
-    rsi_sig = "🔥 Перекуплен" if rsi_val > 70 else "🧊 Перепродан" if rsi_val < 30 else "✅ Нейтрально"
-    macd_sig = "🔺 Бычий" if macd_h > 0 else "🔻 Медвежий"
-    trend_sig = "⚡ Golden Cross" if sma50 > sma200 else "⚠ Death Cross" if sma50 < sma200 else "➖ Нейтрально"
-
-    signal_summary = f"{rsi_sig} | {macd_sig} | {trend_sig}"
+    r_sig = "🔥 Overbought" if r_val > 70 else ("🧊 Oversold" if r_val < 30 else "✅ Neutral")
+    macd_sig = "🔺 Bullish" if m_val > 0 else "🔻 Bearish"
+    trend_sig = "⚡ Golden Cross" if sma50 > sma200 else ("⚠ Death Cross" if sma50 < sma200 else "➖ Neutral")
+    summary = f"{r_sig} | {macd_sig} | {trend_sig}"
     message = (
-        f"{symbol} анализ\n"
-        f"📈 Цена: {price:.2f} USDT\n"
-        f"RSI: {rsi_val:.2f} — {rsi_sig}\n"
-        f"MACD Hist: {macd_h:.2f} — {macd_sig}\n"
-        f"SMA50: {sma50:.2f}, SMA200: {sma200:.2f} — {trend_sig}"
+        f"{symbol} Analysis\n"
+        f"📈 Price: {price:.2f} USDT\n"
+        f"RSI (14): {r_val:.1f} — {r_sig}\n"
+        f"MACD Hist: {m_val:.4f} — {macd_sig}\n"
+        f"SMA50: {sma50:.2f}\n"
+        f"SMA200: {sma200:.2f} — {trend_sig}"
     )
-    return signal_summary, message, (rsi_val, macd_h, sma50, sma200)
+    return summary, message, (r_val, m_val, sma50, sma200)
 
-def draw_chart(symbol, times, prices, sma50, sma200, rsi_val, macd_h):
-    plt.figure(figsize=(10, 6))
-
-    # --- Price and SMA plot ---
-    plt.subplot(2, 1, 1)
-    plt.plot(times, prices, label="Цена", color='blue')
-    if sma50 and sma200:
-        sma50_line = [sma(prices[:i+1], 50) if i >= 49 else None for i in range(len(prices))]
-        sma200_line = [sma(prices[:i+1], 200) if i >= 199 else None for i in range(len(prices))]
-        plt.plot(times, sma50_line, label="SMA 50", color='orange')
-        plt.plot(times, sma200_line, label="SMA 200", color='red')
-    plt.title(f"{symbol} Цена + SMA")
-    plt.legend()
-    plt.grid(True)
-
-    # --- RSI Plot ---
-    plt.subplot(2, 2, 3)
-    plt.axhline(70, color='red', linestyle='--')
-    plt.axhline(30, color='green', linestyle='--')
-    rsi_values = []
-    rsi_times = []
-    for i in range(len(prices[-50:])):
-        global_index = len(prices) - 50 + i
-        if global_index >= 14:
-            rsi_val = rsi(prices[:global_index+1])
-            rsi_values.append(rsi_val)
-            rsi_times.append(times[global_index])
-    plt.plot(rsi_times, rsi_values, label='RSI', color='purple')
-    plt.title("RSI")
-    plt.grid(True)
-
-    # --- MACD Histogram Plot ---
-    plt.subplot(2, 2, 4)
-    macd_vals = []
-    macd_times = []
-    for i in range(len(prices[-50:])):
-        global_index = len(prices) - 50 + i
-        if global_index >= 26:
-            macd_val = macd(prices[:global_index+1])
-            macd_vals.append(macd_val)
-            macd_times.append(times[global_index])
-        else:
-            macd_vals.append(None)
-            macd_times.append(times[global_index])
-
-    signal_vals = [ema(macd_vals[:i+1], 9) if i >= 8 and macd_vals[i] is not None else None for i in range(len(macd_vals))]
-
-    macd_hist_vals = []
-    valid_times = []
-    for i in range(len(macd_vals)):
-        m = macd_vals[i]
-        s = signal_vals[i]
-        t = macd_times[i]
-        if m is not None and s is not None:
-            macd_hist_vals.append(m - s)
-            valid_times.append(t)
-        else:
-            macd_hist_vals.append(0)
-            valid_times.append(t)
-
-    plt.bar(valid_times, macd_hist_vals, color='gray', label='MACD Hist')
-    plt.title("MACD Histogram")
-    plt.grid(True)
-
-    # --- Finalize ---
-    plt.tight_layout()
+def draw_chart(symbol, df):
+    import mplfinance as mpf
     buf = io.BytesIO()
-    plt.savefig(buf, format='png')
+
+    mc = mpf.make_marketcolors(
+        up='#00ff99',
+        down='#ff4d4d',
+        edge='inherit',
+        wick={'up': '#00ff99', 'down': '#ff4d4d'},
+        volume={'up': '#00ff99', 'down': '#ff4d4d'},
+        ohlc='inherit'
+    )
+
+    style = mpf.make_mpf_style(
+        base_mpf_style='binance',
+        marketcolors=mc,
+        facecolor='#000000',        # Candlestick chart background
+        edgecolor='#000000',        # Border color
+        figcolor='#000000',         # Entire figure background
+        gridcolor='#222222',        # Subtle grid
+        rc={
+            'axes.labelcolor': '#CCCCCC',
+            'xtick.color': '#AAAAAA',
+            'ytick.color': '#AAAAAA',
+            'axes.edgecolor': '#333333',
+            'savefig.facecolor': '#000000',
+            'savefig.edgecolor': '#000000',
+        }
+    )
+
+    fig, axlist = mpf.plot(
+        df,
+        type='candle',
+        mav=(50, 200),
+        volume=True,
+        title=f"{symbol} Price (USDT)",
+        style=style,
+        returnfig=True,
+        figsize=(10, 6),
+        tight_layout=True,
+    )
+
+    # Manually set black on all axes backgrounds (main and volume)
+    for ax in axlist:
+        ax.set_facecolor('#000000')
+
+    fig.patch.set_facecolor('#000000')
+
+    fig.savefig(buf, format='png', bbox_inches='tight', facecolor='#000000')
+    plt.close(fig)
     buf.seek(0)
-    plt.close()
     return buf
 
-def analyze_symbols():
-    global previous_signals
-    symbols = ["BTCUSDT", "SOLUSDT", "SUIUSDT", "ENSUSDT"]
-    for symbol in symbols:
-        try:
-            prices, times = fetch_klines(symbol)
-            signal, message, indicators = generate_signal(symbol, prices)
-            if signal is None or indicators is None or any(val is None for val in indicators):
-                print(f"⚠ Недостаточно данных: {symbol}")
-                continue
-            if previous_signals.get(symbol) != signal:
-                image = draw_chart(symbol, times, prices, *indicators)
-                send_telegram(message, image_bytes=image)
-                previous_signals[symbol] = signal
-                print(f"🟢 Обновление {symbol}")
-            else:
-                print(f"⚪ Без изменений: {symbol}")
-        except Exception as e:
-            print(f"🔴 Ошибка анализа {symbol}: {e}")
 
-if __name__ == "__main__": 
+def analyze_symbols():
+    symbols = ["BTCUSDT","SOLUSDT","SUIUSDT","ENSUSDT"]
+    for sym in symbols:
+        try:
+            df = fetch_klines(sym)
+            summary, msg, _ = generate_signal(sym, df)
+            if summary is None:
+                print(f"⚠ Not enough data for {sym}")
+                continue
+            # Only send if signal changed
+            if previous_signals.get(sym) != summary:
+                chart = draw_chart(sym, df)
+                send_telegram(msg, image_bytes=chart)
+                previous_signals[sym] = summary
+                print(f"🟢 Sent {sym} update: {summary}")
+            else:
+                print(f"⚪ {sym} no change: {summary}")
+        except Exception as e:
+            print(f"🔴 Error for {sym}: {e}")
+
+if __name__ == "__main__":
     analyze_symbols()
