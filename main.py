@@ -14,11 +14,11 @@ def analyze_symbols():
                 continue
             if previous_signals.get(sym) != summary:
                 chart = draw_chart(sym, df)
-                #send_telegram(msg, image_bytes=chart)
+                send_telegram(msg, image_bytes=chart)
                 previous_signals[sym] = summary
                 print(f"🟢 Sent {sym} update: {summary}")
             else:
-                print(f"⚪ {sym} no change: {summary}")
+                print(f"⚪ {sym} no change")
         except Exception as e:
             print(f"🔴 Error for {sym}: {e}")
 

@@ -62,10 +62,6 @@ def draw_chart(symbol, df):
     fig.patch.set_facecolor('#000000')
 
     # Add legend for price plot (candles + SMA lines)
-    # Candles are standard, so label SMAs explicitly:
-    handles, labels = price_ax.get_legend_handles_labels()
-
-    # The candlestick does not provide legend handles by default, so we create proxy artists:
     from matplotlib.patches import Patch
     from matplotlib.lines import Line2D
 
@@ -74,15 +70,33 @@ def draw_chart(symbol, df):
     sma50_line = Line2D([0], [0], color='orange', label=mav_labels[0])
     sma200_line = Line2D([0], [0], color='cyan', label=mav_labels[1])
 
-    # Build legend list, prefer replacing existing or adding if missing
     legend_handles = [candle_patch, candle_down_patch, sma50_line, sma200_line]
-    price_ax.legend(handles=legend_handles, loc='upper left', fontsize=9, facecolor='#111111', edgecolor='#444444')
+    legend = price_ax.legend(
+        handles=legend_handles,
+        loc='upper left',
+        fontsize=9,
+        facecolor='#111111',
+        edgecolor='#444444'
+    )
+
+    # Set legend text color to white
+    for text in legend.get_texts():
+        text.set_color('white')
 
     # Add legend to volume axis if exists
     if volume_ax is not None:
         vol_patch_up = Patch(color='#00ff99', label=volume_label + ' (Рост)')
         vol_patch_down = Patch(color='#ff4d4d', label=volume_label + ' (Падение)')
-        volume_ax.legend(handles=[vol_patch_up, vol_patch_down], loc='upper right', fontsize=9, facecolor='#111111', edgecolor='#444444')
+        vol_legend = volume_ax.legend(
+            handles=[vol_patch_up, vol_patch_down],
+            loc='upper right',
+            fontsize=9,
+            facecolor='#111111',
+            edgecolor='#444444'
+        )
+
+        for text in vol_legend.get_texts():
+            text.set_color('white')
 
     fig.savefig(buf, format='png', bbox_inches='tight', facecolor='#000000')
     plt.close(fig)
