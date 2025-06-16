@@ -1,4 +1,5 @@
 from components import fetch_klines, generate_signal, send_telegram, draw_chart
+import time
 
 previous_signals = {}
 
@@ -13,7 +14,7 @@ def analyze_symbols():
                 continue
             if previous_signals.get(sym) != summary:
                 chart = draw_chart(sym, df)
-                send_telegram(msg, image_bytes=chart)
+                #send_telegram(msg, image_bytes=chart)
                 previous_signals[sym] = summary
                 print(f"🟢 Sent {sym} update: {summary}")
             else:
@@ -22,6 +23,6 @@ def analyze_symbols():
             print(f"🔴 Error for {sym}: {e}")
 
 if __name__ == "__main__":
-    while true:
+    while True:
         analyze_symbols()
         time.sleep(600)
