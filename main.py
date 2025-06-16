@@ -22,4 +22,6 @@ def analyze_symbols():
             print(f"🔴 Error for {sym}: {e}")
 
 if __name__ == "__main__":
-    analyze_symbols()
+    while true:
+        analyze_symbols()
+        time.sleep(600)
