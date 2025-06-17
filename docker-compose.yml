@@ -4,7 +4,7 @@ services:
   tgbot:
     build:
       context: .
-      dockerfile: dockerfile
+      dockerfile: Dockerfile
     image: kaljmarik/tgbot
     ports:
       - "8010:8000"  #external:internal
