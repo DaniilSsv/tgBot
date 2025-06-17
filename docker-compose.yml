@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  tgbot:
+    build: .
+    image: kaljmarik/tgbot
+    restart: always
+    ports:
+      - "8010:8000"  #external:internal
+    environment:
+      - TELEGRAM_BOT_TOKEN=""
+      - TELEGRAM_CHAT_ID=""
+    pull_policy: build
