@@ -4,7 +4,7 @@ import time
 previous_signals = {}
 
 def analyze_symbols():
-    symbols = ["BTCUSDT", "SOLUSDT", "SUIUSDT", "ENSUSDT"]
+    symbols = ["BTCUSDT", "ENSUSDT"]
     for sym in symbols:
         try:
             df = fetch_klines(sym)
